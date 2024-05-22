@@ -1,0 +1,5 @@
+py-solc-x
+ruff
+web3
+ujson
+eth_account
