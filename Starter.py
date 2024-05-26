@@ -213,6 +213,8 @@ async def main(test_count: 1):
 
         txs = []
 
+        start_time = 0.0
+
         for acc in accounts:
             tx = await token_contract.functions.transfer(
                 web3_client.eth.account.create().address, int(0.0001 * 10**18)
@@ -226,29 +228,41 @@ async def main(test_count: 1):
             signed_tx = web3_client.eth.account.sign_transaction(
                 tx, private_key=acc.key
             )
+
+            if accounts.index(acc) == 0:
+                start_time = time()
+
             tx_hash = await web3_client.eth.send_raw_transaction(
                 signed_tx.rawTransaction
             )
             txs.append(tx_hash)
 
-        start_time = time()
-
         total_txs = len(txs)
 
         gas_used_coll = []
 
-        while len(txs) > 0:
-            for tx_hash in txs:
-                try:
-                    receipt = await web3_client.eth.get_transaction_receipt(tx_hash)
-                    if receipt.status == 1:
-                        gas_used_coll.append(
-                            receipt.gasUsed * receipt.effectiveGasPrice
-                        )
-                        txs.remove(tx_hash)
-                except:
-                    continue
-        duration = time() - start_time
+        # while len(txs) > 0:
+        #     for tx_hash in txs:
+        #         try:
+        #             receipt = await web3_client.eth.get_transaction_receipt(tx_hash)
+        #             if receipt.status == 1:
+        #                 gas_used_coll.append(
+        #                     receipt.gasUsed * receipt.effectiveGasPrice
+        #                 )
+        #                 txs.remove(tx_hash)
+        #         except:
+        #             continue
+
+        duration = 0.0
+
+        while True:
+            try:
+                receipt = await web3_client.eth.get_transaction_receipt(txs[-1])
+                if receipt.status == 1:
+                    duration = time() - start_time
+                    break
+            except:
+                continue
 
         tps = total_txs / duration
 
