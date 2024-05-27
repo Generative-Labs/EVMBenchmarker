@@ -21,7 +21,6 @@ ERC20_CONTRACT = ""
 # If you will testing RETH, UNCOMMENT the following code snippet.
 # bank_account: LocalAccount = Account.from_mnemonic(
 #     "test test test test test test test test test test test junk",
-
 #     account_path=f"m/44'/60'/0'/0/{0}",
 # )
 
@@ -281,13 +280,12 @@ async def prepare(accounts_num: int = 1000):
     )
 
     if not BATCH_TRANSFER_CONTRACT:
-        batch_transfer_contract, abi = await deploy_contract_by_file(
-            "batch_transfer.sol"
+        batch_transfer_contract, abi = await deploy_compiled_contract(
+            "BatchTransfer.json"
         )
     else:
-        compiled_contract = compile_source_file("contracts/batch_transfer.sol")
-        _, contract_interface = compiled_contract.popitem()
-        abi = contract_interface["abi"]
+        COMPILED_CONTRACT: dict = load_compiled_contract("contracts/BatchTransfer.json")
+        abi = COMPILED_CONTRACT.get("abi")
         batch_transfer_contract = BATCH_TRANSFER_CONTRACT
     accounts = await create_accounts(accounts_num)
     await transfer_native_token_to_accounts(batch_transfer_contract, abi, accounts)
