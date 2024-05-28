@@ -5,18 +5,22 @@ from web3.middleware.signing import async_construct_sign_and_send_raw_middleware
 from eth_account import Account
 from eth_account.signers.local import LocalAccount
 from ujson import loads
-from asyncio import get_event_loop
+from asyncio import get_event_loop, gather
 from time import time
 import statistics
 
 
 Account.enable_unaudited_hdwallet_features()
 
-EVM_NODE_URI = "your node URI here"
+EVM_NODE_URI = "http://192.168.5.134:8545"
 
 BATCH_TRANSFER_CONTRACT = ""
 
+BATCH_NUM = 500  # 500 for RETH, 200 for EVMOS
+
 ERC20_CONTRACT = ""
+
+BLOCK_TIME = 2
 
 # If you will testing RETH, UNCOMMENT the following code snippet.
 # bank_account: LocalAccount = Account.from_mnemonic(
@@ -32,9 +36,9 @@ ERC20_CONTRACT = ""
 # )
 
 # If you will testing Frontier, UNCOMMENT the following code snippet.
-# bank_account: LocalAccount = Account.from_key(
-#     "0x99B3C12287537E38C90A9219D4CB074A89A16E9CDB20BF85728EBD97C343E342"
-# )
+bank_account: LocalAccount = Account.from_key(
+    "0x99B3C12287537E38C90A9219D4CB074A89A16E9CDB20BF85728EBD97C343E342"
+)
 
 
 print(bank_account.address)
@@ -153,11 +157,11 @@ async def transfer_native_token_to_accounts(
     for acc in accounts:
         # print(acc.address)
         transfer_to.append(acc.address)
-        if len(transfer_to) == 1000:  # 500 for RETH, 200 for EVMOS
+        if len(transfer_to) == BATCH_NUM:  # 500 for RETH, 200 for EVMOS
             tx_hash = await batch_transfer.functions.transfers(
                 transfer_to, int(amount * 10**18)
             ).transact()
-            print("Transfer to accounts TX:", hex(int.from_bytes(tx_hash)))
+            print(f"Transfer to {BATCH_NUM} accounts TX:", hex(int.from_bytes(tx_hash)))
             receipt = await web3_client.eth.wait_for_transaction_receipt(tx_hash)
             # print(
             #     ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>",
@@ -190,11 +194,14 @@ async def transfer_erc20_token_to_accounts(
     for acc in accounts:
         # print(acc.address)
         transfer_to.append(acc.address)
-        if len(transfer_to) == 1000:
+        if len(transfer_to) == BATCH_NUM:
             tx_hash = await token_contract.functions.batch_transfer(
                 transfer_to, int(amount * 10**18)
             ).transact()
-            print("Transfer ERC20 to accounts TX:", hex(int.from_bytes(tx_hash)))
+            print(
+                f"Transfer ERC20 to {BATCH_NUM} accounts TX:",
+                hex(int.from_bytes(tx_hash)),
+            )
             receipt = await web3_client.eth.wait_for_transaction_receipt(tx_hash)
             # print(
             #     ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>",
@@ -210,9 +217,13 @@ async def main(test_count: 1):
     for i in range(test_count):
         accounts, token_contract = await prepare()
 
+        block_tx_mapping = {}
+
         txs = []
 
-        start_time = 0.0
+        tasks = []
+
+        # start_time = time()
 
         for acc in accounts:
             tx = await token_contract.functions.transfer(
@@ -228,40 +239,53 @@ async def main(test_count: 1):
                 tx, private_key=acc.key
             )
 
-            if accounts.index(acc) == 0:
-                start_time = time()
+            # tx_hash = await web3_client.eth.send_raw_transaction(
+            #     signed_tx.rawTransaction
+            # )
+            # txs.append(tx_hash)
+            # print(f"{time()}")
 
-            tx_hash = await web3_client.eth.send_raw_transaction(
-                signed_tx.rawTransaction
-            )
-            txs.append(tx_hash)
+            tasks.append(web3_client.eth.send_raw_transaction(signed_tx.rawTransaction))
+
+        start_time = time()
+        results = await gather(*tasks, return_exceptions=True)
+
+        print(f"The time of TXs sending: {time()-start_time}")
+        for result in results:
+            txs.append(result)
+
+        start_time = time()
 
         total_txs = len(txs)
 
         gas_used_coll = []
 
-        # while len(txs) > 0:
-        #     for tx_hash in txs:
-        #         try:
-        #             receipt = await web3_client.eth.get_transaction_receipt(tx_hash)
-        #             if receipt.status == 1:
-        #                 gas_used_coll.append(
-        #                     receipt.gasUsed * receipt.effectiveGasPrice
-        #                 )
-        #                 txs.remove(tx_hash)
-        #         except:
-        #             continue
+        while len(txs) > 0:
+            for tx_hash in txs:
+                try:
+                    receipt = await web3_client.eth.get_transaction_receipt(tx_hash)
+                    if receipt.status == 1:
+                        block_tx_mapping[receipt.blockNumber] = (
+                            block_tx_mapping.get(receipt.blockNumber, 0) + 1
+                        )
+                        gas_used_coll.append(
+                            receipt.gasUsed * receipt.effectiveGasPrice
+                        )
+                        txs.remove(tx_hash)
+                except:
+                    continue
 
-        duration = 0.0
+        duration = time() - start_time
 
-        while True:
-            try:
-                receipt = await web3_client.eth.get_transaction_receipt(txs[-1])
-                if receipt.status == 1:
-                    duration = time() - start_time
-                    break
-            except:
-                continue
+        # while True:
+        #     try:
+        #         receipt = await web3_client.eth.get_transaction_receipt(txs[-1])
+        #         if receipt.status == 1:
+        #             duration = time() - start_time
+        #             gas_used_coll.append(receipt.gasUsed * receipt.effectiveGasPrice)
+        #             break
+        #     except:
+        #         continue
 
         tps = total_txs / duration
 
@@ -269,6 +293,7 @@ async def main(test_count: 1):
         print(
             f"Round {i}:  Duration: {duration}, total txs: {total_txs}, TPS:{tps} , avg Gas: {statistics.mean(gas_used_coll)}\r\n"
         )
+        print(block_tx_mapping)
 
         tps_coll.append(tps)
     print(f"{test_count}Rounds avg TPS: {statistics.mean(tps_coll)}")
